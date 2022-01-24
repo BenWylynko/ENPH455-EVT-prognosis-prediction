@@ -45,10 +45,10 @@ def feature_removal_corr(df, corr, thres = 0.6):
     columns = np.full((corr.shape[0],), True, dtype=bool)
     for i in range(corr.shape[0]):
         for j in range(i+1, corr.shape[0]):
-            if corr.iloc[i,j] >= thres:
+            if abs(corr.iloc[i,j]) >= thres:
                 if columns[j]:
                     columns[j] = False
-    print(f"Removing columns {list(df.columns[columns == False])}")
+    print(f"Correlation removing columns {list(df.columns[columns == False])}")
     selected_columns = df.columns[columns]
     return df[selected_columns], selected_columns
 
@@ -86,8 +86,23 @@ def feature_removal_p_value(df, cols, y, sheet_name, sig_p = 0.05):
     
     data_filtered, selected_cols = backwardElimination(df, 
         cols)
-    print(f"Removing columns {list(set(cols).difference(set(selected_cols)))}")
+    print(f"p value removing columns {list(set(cols).difference(set(selected_cols)))}")
     return data_filtered, selected_cols
+
+def save(df_all, df_acc, cols_all, cols_acc, Reperf_bin, TICI_bin, fpath):
+
+    #back to dataframes
+    df_all = pd.DataFrame(data=df_all, columns=cols_all)
+    df_all.insert(0, 'Reperfusion_score', Reperf_bin)
+
+    df_acc = pd.DataFrame(data=df_acc, columns=cols_acc)
+    df_acc.insert(0, 'TICI', TICI_bin)
+
+    #save
+    with pd.ExcelWriter(fpath) as writer:  
+        df_all.to_excel(writer, sheet_name='All observations')
+        df_acc.to_excel(writer, sheet_name='ACC cases')
+
 
 """
 Loading data
@@ -135,25 +150,19 @@ print(f"All initial cols: {AllColNames}")
 print(f"Acc initial cols: {ACCColNames}")
 
 #corr removal
+corr_thresh = 0.5
 df_all, cols_all = feature_removal_corr(df_all, corr_all)
 df_acc, cols_acc = feature_removal_corr(df_acc, corr_acc)
-print(df_all.shape, len(cols_all))
+
+#save after corr removal
+results_path = r"Z:\EVT Project Data\de-identified patient data\feature_removed_corr.xlsx"
+save(df_all, df_acc, cols_all, cols_acc, Reperf_bin, TICI_bin, results_path)
 
 #p value removal
 p_thresh = 0.2
 df_all, cols_all = feature_removal_p_value(df_all, cols_all, Reperf_bin, 'all', sig_p = p_thresh)
 df_acc, cols_acc = feature_removal_p_value(df_acc, cols_acc, TICI_bin, 'acc', sig_p = p_thresh)
-print(df_all.shape, len(cols_all))
 
-#back to dataframes
-df_all = pd.DataFrame(data=df_all, columns=cols_all)
-df_all.insert(0, 'Reperfusion_score', Reperf_bin)
-
-df_acc = pd.DataFrame(data=df_acc, columns=cols_acc)
-df_acc.insert(0, 'TICI', TICI_bin)
-
-#save
-results_path = r"Z:\EVT Project Data\de-identified patient data\feature_removed.xlsx"
-with pd.ExcelWriter(results_path) as writer:  
-    df_all.to_excel(writer, sheet_name='All observations')
-    df_acc.to_excel(writer, sheet_name='ACC cases')
+#save after both methods
+results_path = r"Z:\EVT Project Data\de-identified patient data\feature_removed_final.xlsx"
+save(df_all, df_acc, cols_all, cols_acc, Reperf_bin, TICI_bin, results_path)
