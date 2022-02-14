@@ -9,6 +9,11 @@ import random
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
 from sklearn.linear_model import LinearRegression
+import argparse
+from pathlib import Path
+import copy
+
+BASE = 'Z:\EVT Project Data/de-identified patient data'
 
 os.chdir('Z:\EVT Project Data/de-identified patient data')
 
@@ -38,9 +43,14 @@ headingsAcc.append('TICI') #there's 1 missing TICI value so I'll impute it. This
 
 #define headings which should be categorical
 catHeadingsAll = ['NIHSS_Arrival', 'NIHSS_day_1', 'tPA_given', 'collateral score']
-catHeadingsAcc = ['Ca at LVO', 'Ca Number', 'ICAS Proximal', 'Ca PA/Supra ICA', 
+catHeadingsAcc = ['Hyperdense Thro', 'Ca at LVO', 'Ca Number', 'ICAS Proximal', 'Ca PA/Supra ICA', 
     'Comparison CTRL', 'Tortuos parent art', 'Kink Parent', 'Device', 'Passes', 
     'Complication', 'ICA OCCL on CTA']
+
+headingsEVT = copy.copy(headingsAcc)
+catHeadingsEVT = copy.copy(catHeadingsAcc)
+headingsEVT.extend(['Gender', 'AGE'])
+catHeadingsEVT.extend(['AGE', 'LOV', 'SIDE', 'HU', 'Gender'])
 
 def mice_inpute_feature(X, sheet):
     """
@@ -73,6 +83,60 @@ def mice_inpute_feature(X, sheet):
     locs = np.empty((len(headings)), dtype=str)
     for i, h in enumerate(headings):
         locs[i] = h
+
+    #count missing values
+    n_values = X[headings].isna().sum().sum()
+    print(f"Total number of missing values in relevant columns: {n_values}")
+
+    #perform imputations
+    X_headings = X[headings].copy()
+    X_headings=imp.fit_transform(X_headings)
+
+    #replace the corresponding columns in X, bounding to > 0
+    for i, h in enumerate(headings):
+        X[h] = np.where(X_headings[:, i] < 0, 0, X_headings[:, i])
+    
+
+    #for categorical headings, discretize imputed values
+    for i, h in enumerate(headingsCat):
+        #apply floor, ceiling based on max column value
+        X[h] = X[h].clip(lower = min_maxes[i, 0]).clip(upper = min_maxes[i, 1])
+        #use round to discretize these columns
+        X[h] = X[h].astype(float).round(decimals = 0)
+
+    return X
+
+def mice_inpute_feature_failed(X):
+
+    headings = headingsEVT
+    headingsCat = catHeadingsEVT
+
+
+    #get min and max bounds of each column which will be imputed
+    min_maxes = np.empty((len(headingsCat), 2))
+    for i, h in enumerate(headingsCat):
+        min_maxes[i] = (X[h].min(), X[h].max())
+
+
+    #source: https://www.numpyninja.com/post/mice-and-knn-missing-value-imputations-through-python
+    #only use specified headings for lin reg models and only impute values in these headings
+    lr = LinearRegression()
+    imp = IterativeImputer(estimator=lr,missing_values=np.nan, max_iter=10, 
+        verbose=2, imputation_order='roman',random_state=0)
+
+    #need to track indices of each heading
+    locs = np.empty((len(headings)), dtype=str)
+    for i, h in enumerate(headings):
+        locs[i] = h
+
+    #count missing values
+    n_values = X[headings].isna().sum().sum()
+    print(f"Total number of missing values in relevant columns: {n_values}")
+
+    #fraction of missing values
+    n_vals_tot = X[headings].count().sum()
+    print(f"Total number of values: {n_vals_tot}")
+    print(f"Fraciton of missing values to be imputed: {n_values / n_vals_tot}")
 
     #perform imputations
     X_headings = X[headings].copy()
@@ -143,7 +207,7 @@ def Encoder(df):
 
     return columnsToEncode
             
-def format_pipeline(df, sheet):
+def format_pipeline(df, sheet=None):
 
     #remove leading, trailing whitespace
     df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
@@ -153,38 +217,74 @@ def format_pipeline(df, sheet):
     print(f"Encoded columns: {encodedCols}")
 
     #Date in days
-    df["Date"] = df["Date"].map(lambda x: x.to_pydatetime())
-    df["Date"] = df["Date"].map(lambda x: 365*x.year + 30*x.month + x.day)
+    #df["Date"] = df["Date"].map(lambda x: x.to_pydatetime())
+    #df["Date"] = df["Date"].map(lambda x: 365*x.year + 30*x.month + x.day)
 
     #Time
-    df["Time"] = df["Time"].map(lambda x: x.hour + (x.minute / 60.0) if isinstance(x, datetime.time) else random.random()*24)
+    #df["Time"] = df["Time"].map(lambda x: x.hour + (x.minute / 60.0) if isinstance(x, datetime.time) else random.random()*24)
+
+    #remove stuff for the failed EVT spreadsheet
+    if sheet is None:
+        for c in ['Unnamed: 0', 'Unnamed: 1', 'CR', 'Explanation compl', 'Unnamed: 22']:
+            del df[c]
+        #remove TICI rows with no value
+        nan_inds = np.where(list(df['TICI'].isnull()))[0]
+        print(nan_inds)
+        df = df.drop(index=nan_inds)
+
 
     #MICE imputing (only use valid numerical columns)
-    df_out = mice_inpute_feature(df, sheet)
+    #df_out = mice_inpute_feature(df, sheet)
+    df_out = mice_inpute_feature_failed(df)
 
     return df_out
     
 
 fpath = 'Z:\EVT Project Data/de-identified patient data/Patient_Data.xlsx'
 
-df1 = pd.read_excel(
-    fpath, 
-    nrows=43, 
-    sheet_name='All observations')
+def main(fpath):
 
-df2 = pd.read_excel(
-    fpath, 
-    nrows=43, 
-    sheet_name='ACC cases')
 
-df1_encoded = format_pipeline(df1, "all")
-df2_encoded = format_pipeline(df2, "acc")
+    """
+    df1 = pd.read_excel(
+        fpath, 
+        nrows=57, 
+        sheet_name='All observations')
 
-#save both dataframes into 1 csv
-with pd.ExcelWriter('encoded.xlsx') as writer:  
-    df1_encoded.to_excel(writer, sheet_name='All observations')
-    df2_encoded.to_excel(writer, sheet_name='ACC cases')
+    df2 = pd.read_excel(
+        fpath, 
+        nrows=57, 
+        sheet_name='ACC cases')
 
+    df1_encoded = format_pipeline(df1, "all")
+    df2_encoded = format_pipeline(df2, "acc")
+
+    #save both dataframes into 1 csv
+    with pd.ExcelWriter('encoded.xlsx') as writer:  
+        df1_encoded.to_excel(writer, sheet_name='All observations')
+        df2_encoded.to_excel(writer, sheet_name='ACC cases')
+    """
+
+    df1 = pd.read_excel(
+        fpath, 
+        nrows=57)
+
+    df1_encoded = format_pipeline(df1)
+    #save both dataframes into 1 csv
+    with pd.ExcelWriter(Path(fpath.parents[0], 'encoded.xlsx')) as writer:  
+        df1_encoded.to_excel(writer)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-in", "--infile", default="Patient_Data.xlsx", 
+        help="Name of file to load for modelling")
+    args = parser.parse_args()
+
+    fpath = Path(BASE, args.infile)
+    print(f"Using filepath {fpath}")
+    assert fpath.exists()
+
+    main(fpath)
 
 
 

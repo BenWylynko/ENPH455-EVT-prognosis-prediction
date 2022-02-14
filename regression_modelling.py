@@ -23,6 +23,11 @@ ACCColNames = [
     'Comparison CTRL', 'Tortuos parent art', 'Kink Parent',
     'Device', 'ICA OCCL on CTA']
 
+OneColNames = [
+    'LOV', 'SIDE', 'HU', 'Hyperdense Thro', 
+    'Ca at LVO', 'Ca Number', 'ICAS Proximal', 'Ca PA/Supra ICA',
+    'Comparison CTRL', 'Tortuos parent art', 'Kink Parent'
+]
 
 def filter_nans(X, y):
     """
@@ -133,8 +138,10 @@ def table2_model(df, labels, sheet_name):
 
     if sheet_name == 'all':
         cols = AllColNames
-    else:
+    elif sheet_name == 'acc':
         cols = ACCColNames
+    else:
+        cols = df.columns
 
     print(f"\nTable 2 modelling for {sheet_name} data\n")
     betas = np.empty((len(cols)))
@@ -157,8 +164,10 @@ def table3_model(df, labels, sheet_name):
 
     if sheet_name == 'all':
         cols = AllColNames
-    else:
+    elif sheet_name == 'acc':
         cols = ACCColNames
+    else:
+        cols = df.columns
 
     #create model for All cases
     data = df[cols]
@@ -263,17 +272,75 @@ def main(fpath):
         t3_all.to_excel(writer, sheet_name='Table 3 All')
         t3_acc.to_excel(writer, sheet_name='Table 3 ACC')
 
+def main_one(fpath):
+    df = pd.read_excel( 
+        fpath, 
+        nrows=82)
+
+    #we don't need to map to binary again if we're passing the feature removed sheet
+    if "usable" not in str(fpath):
+        TICI_bin = df["TICI"] >= 3
+    else: #using the feature removed sheet
+        TICI_bin = df["TICI"]
+
+    if 'Device' in df.columns:
+        df = df.drop(columns=["Device"])
+    if 'ICA OCCL on CTA' in df.columns:
+        df = df.drop(columns=["ICA OCCL on CTA"])
+
+    df = df.drop(columns=["Unnamed: 0", "TICI"])
+
+    ### standardize the data
+    # all
+    cols = df.columns
+    scaler = MinMaxScaler().fit(df)
+    df = scaler.transform(df)
+
+    #cast back to dataframe
+    df = pd.DataFrame(data=df, columns=cols)
+
+
+    """
+    Table 2 (modelling each variable individually against
+    TICI / reperfusion score)
+    """
+    t2 = table2_model(df, TICI_bin, 'one')
+
+
+    """
+    Table 3
+    Modelling the effect of each feature in 2 logistic regression models (1 for All cases, 1 for ACC)
+    Trying this first since it makes the most of the available data, and I could create 2 separate SVMs
+    which use the 2 sets of features independently (ensemble)
+    """
+    print("\nPerforming Table 3 regression modelling\n")
+
+    t3 = table3_model(df, TICI_bin, 'one')
+
+    #save analysis values in spreadsheet
+    results_path = Path(fpath.parents[0], fpath.stem + '_log_results.xlsx')
+    print(results_path)
+
+    #save
+    with pd.ExcelWriter(results_path) as writer:  
+        t2.to_excel(writer, sheet_name='Table 2')
+        t3.to_excel(writer, sheet_name='Table 3')
 
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument("-in", "--infile", default="encoded.xlsx", 
         help="Name of file to load for modelling")
+    parser.add_argument("-s", default="both", 
+        help="2 sheets or no")
     args = parser.parse_args()
 
     fpath = Path(BASE, args.infile)
     assert fpath.exists()
 
-    main(fpath)
+    if args.s == 'both':
+        main(fpath)
+    else:
+        main_one(fpath)
 
 
