@@ -3,10 +3,13 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import numpy as np
 import statsmodels.api as sm
+import statsmodels.formula.api as smf
 import datetime
 from sklearn.feature_selection import chi2
 import argparse
 from pathlib import Path
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
 
 BASE = 'Z:\EVT Project Data/de-identified patient data'
 
@@ -23,11 +26,26 @@ ACCColNames = [
     'Comparison CTRL', 'Tortuos parent art', 'Kink Parent',
     'Device', 'ICA OCCL on CTA']
 
-OneColNames = [
-    'LOV', 'SIDE', 'HU', 'Hyperdense Thro', 
-    'Ca at LVO', 'Ca Number', 'ICAS Proximal', 'Ca PA/Supra ICA',
-    'Comparison CTRL', 'Tortuos parent art', 'Kink Parent'
-]
+feature_mapping = {
+    'LOV': ['ICA', 'Terminus', 'M1', 'M2'], 
+    'SIDE': ['Rt', 'Lt'], 
+    'HU': ['<50', '50-99'], 
+    'Hyperdense Thro': ['No', 'Yes'], 
+    'Hyperdense': ['No', 'Yes'], 
+    'Ca at LVO': ['No', 'Yes'], 
+    'Ca': ['No', 'Yes'],
+    'Ca number': ['0', '1'], 
+    'ICAS Proximal': ['No', 'Yes'], 
+    'ICAS': ['No', 'Yes'], 
+    'Ca PA/Supra ICA': ['No', 'Yes'],
+    'Ca_PA': ['No', 'Yes'],
+    'Comparison CTRL': ['less severe', 'same', 'more severe'],
+    'Comparison': ['less severe', 'same', 'more severe'],
+    'Tortuos parent art': ['No', 'Yes'],  
+    'Tortuos': ['No', 'Yes'],  
+    'Kink Parent': ['Kink', 'Coil', 'None'], 
+    'TICI': ['0', '1', '2A', '2B', '2C', '3'], 
+}
 
 def filter_nans(X, y):
     """
@@ -41,20 +59,6 @@ def filter_nans(X, y):
             y.pop(i)
 
     return X, y
-
-def conf_mat(preds, ys):
-    """
-    Basic confusion matrix, to check logistic regression performance
-    """
-
-    #(N, 2) to (N) 
-    preds_bin = np.array([0 if p[0] > p[1] else 1 for p in preds])
-    TP = len(np.where(np.logical_and(preds_bin == 1, ys == 1))[0])
-    TN = len(np.where(np.logical_and(preds_bin == 0, ys == 0))[0])
-    FP = len(np.where(np.logical_and(preds_bin == 1, ys == 0))[0])
-    FN = len(np.where(np.logical_and(preds_bin == 0, ys == 1))[0])
-    m = np.array([[TP, FP], [FN, TN]])
-    print(f"Confusion matrix: {m}")
 
 def log_std_err(X, Y, log):
     """
@@ -82,7 +86,7 @@ def log_std_err(X, Y, log):
 
     return std_errs
 
-def fit_log(X, Y, single=True):
+def fit_log(X, Y, single=True, name='corr'):
     """
     Fit a logistic regression with each variable in X
     Y is TICI / Reperfusion score
@@ -91,30 +95,51 @@ def fit_log(X, Y, single=True):
 
     If single is False, return arrays of beta, serr, p for each independent feature
     """
+    if isinstance(X, pd.DataFrame):
+        name = X.columns[0]
+    else: #Series
+        name = X.name
+    if single: #return at least 2 sets of values
+        first_val = X.unique()[0]
+        #X = pd.get_dummies(X, columns=[name])
+        X_in = pd.DataFrame([X, Y], index=[name, 'TICI']).T
 
-    if len(X.shape) == 1:
-        X = np.array(X).reshape(-1, 1)
-    
-    if single:
-        mod = sm.Logit(Y,X)
+        #with name col as categorical type
+        X_in[name] = X_in[name].astype('category')
+        X_in['TICI'] = X_in['TICI'].astype(int)
+ 
+        mod = smf.logit(f"TICI ~ C({name}, Treatment('{first_val}'))", data=X_in)
         fii = mod.fit()
         summary = fii.summary2()
-
-        beta = summary.tables[1]['Coef.'][0]
-        serr = summary.tables[1]['Std.Err.'][0]
-        p = summary.tables[1]['P>|z|'][0]
-        return beta, serr, p
+        betas = summary.tables[1]['Coef.']
+        serrs = summary.tables[1]['Std.Err.']
+        ps = summary.tables[1]['P>|z|']
+        return betas, serrs, ps
     else:
-        log = LogisticRegression(random_state=0, fit_intercept=True, penalty='none').fit(X, Y)
-        betas = log.coef_
-        betas = np.reshape(betas, (betas.shape[1])) #estimate
+        X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.2, 
+            random_state=71, stratify=Y)
 
-        #get standard error
-        serrs = log_std_err(X, Y, log)
+        #should be able to do multivariate with statsmodels (R backend)
+        #X_in = pd.concat([X_train, y_train], axis=1)
+        X_in = pd.concat([X, Y], axis=1)
+        X_in['TICI'] = X_in['TICI'].astype(int)
+        
+        if name == 'corr':
+            mod = smf.logit(f"TICI ~ LOV + SIDE + HU + Hyperdense + Ca + ICAS + Ca_PA + Comparison + Tortuos", 
+                data=X_in, family='binomial')
+        else:
+            mod = smf.logit(f"TICI ~ LOV + SIDE + HU + Hyperdense + Ca + Ca_num + ICAS + Ca_PA + Comparison + Tortuos + Kink", 
+                data=X_in, family='binomial')
+        fii = mod.fit()
+        summary = fii.summary2()
+        betas = summary.tables[1]['Coef.']
+        serrs = summary.tables[1]['Std.Err.']
+        ps = summary.tables[1]['P>|z|']
 
-        #get p values
-        scores, ps = chi2(X, Y)
-
+        
+        #get AUC
+        yhat = mod.predict(X)
+        preds = list(map(round,yhat))      
         return betas, serrs, ps
 
 
@@ -142,22 +167,34 @@ def table2_model(df, labels, sheet_name):
         cols = ACCColNames
     else:
         cols = df.columns
+        #dropping features due to singular matrix error
+        #drop kink parent for now
+        #cols = cols.drop("Kink Parent")
+        #drop Comparison CTRL too\
+        if "Comparison CTRL" in cols:
+            cols = cols.drop("Comparison CTRL")
+        elif "Comparison" in cols:
+            cols = cols.drop("Comparison")
 
     print(f"\nTable 2 modelling for {sheet_name} data\n")
-    betas = np.empty((len(cols)))
-    serrs = np.empty((len(cols)))
-    ps = np.empty((len(cols)))
+    betas = []
+    serrs = []
+    ps = []
     for i, colName in enumerate(cols):
         print(f"Performing logistic regression with column {colName}")
         #generate coeffs with single predictor models
-        betas[i], serrs[i], ps[i] = fit_log(df[colName], labels.copy())
-        print(f"Beta: {betas[i]}, standard error: {serrs[i]}, p value: {ps[i]}")
+        b, s, p = fit_log(df[colName], labels.copy())
+        betas.append(np.array(b))
+        serrs.append(np.array(s))
+        ps.append(np.array(p))
 
-    data = np.array([cols, betas, serrs, ps]).T
+    references = [feature_mapping[cat][0] for cat in cols]
+    cat_vals = [feature_mapping[cat][1:] for cat in cols]
+    data = np.array([cols, betas, serrs, ps, references, cat_vals]).T
     return pd.DataFrame(data = data,
-        columns=['Feature name', 'Estimate', 'Standard Error', 'P value'])
+        columns=['Feature name', 'Estimate', 'Standard Error', 'P value', 'reference', 'categorical values'])
 
-def table3_model(df, labels, sheet_name):
+def table3_model(df, labels, sheet_name, fname):
     """
     Generate stats for table 3 (multiple log reg models)
     """
@@ -173,106 +210,14 @@ def table3_model(df, labels, sheet_name):
     data = df[cols]
 
     #generate coeffs with multiple predictors model
-    betas, serrs, ps = fit_log(data, labels.copy(), single=False)
-    
+    betas, serrs, ps = fit_log(data, labels.copy(), single=False, name=fname)
+
     #return dataframe
     data = np.column_stack((cols, betas, serrs, ps))
     return pd.DataFrame(data = data,
         columns=['Feature name', 'Estimate', 'Standard Error', 'P value'])
 
-
-def main(fpath):
-
-    print(f"Loading spreadsheet {fpath}")
-    df_all = pd.read_excel( #use "Reperfusion score" instead of TICI
-        fpath, 
-        nrows=82, 
-        sheet_name='All observations')
-
-    df_acc = pd.read_excel( #use TICI
-        fpath, 
-        nrows=43, 
-        sheet_name='ACC cases')
-
-
-    #we don't need to map to binary again if we're passing the feature removed sheet
-    if "feature_removed" not in str(fpath):
-        TICI_bin = df_acc["TICI"] >= 3
-        Reperf_bin = df_all["Reperfusion_score"] >= 3
-    else: #using the feature removed sheet
-        TICI_bin = df_acc["TICI"]
-        Reperf_bin = df_all["Reperfusion_score"]
-
-        #also change the columns to use (only want columns in the sheet)
-        global AllColNames, ACCColNames
-        AllColNames = list(df_all.columns)
-        ACCColNames = list(df_acc.columns)
-        AllColNames.remove('Unnamed: 0')
-        AllColNames.remove('Reperfusion_score')
-        ACCColNames.remove('Unnamed: 0')
-        ACCColNames.remove('TICI')
-
-    df_all = df_all.drop(columns=["Unnamed: 0", "Reperfusion_score"])
-    df_acc = df_acc.drop(columns=["Unnamed: 0", "TICI"])
-
-    
-    ### Rove features with low likelihood of being relevant, or redundant
-    headings_remove = ['ACC', 'ratio', 'DC_Disposition', 'Comments']
-    for h in headings_remove:
-        if h in df_all.columns:
-            del df_all[h]
-        if h in df_acc.columns:
-            del df_acc[h]
-
-
-    ### standardize the data
-    # all
-    all_cols = df_all.columns
-    scaler_all = MinMaxScaler().fit(df_all)
-    df_all = scaler_all.transform(df_all)
-
-    # acc
-    acc_cols = df_acc.columns
-    scaler_acc = MinMaxScaler().fit(df_acc)
-    df_acc = scaler_acc.transform(df_acc)
-
-    #cast back to dataframes
-    df_all = pd.DataFrame(data=df_all, columns=all_cols)
-    df_acc = pd.DataFrame(data=df_acc, columns=acc_cols)
-
-
-
-    """
-    Table 2 (modelling each variable individually against
-    TICI / reperfusion score)
-    """
-    t2_all = table2_model(df_all, Reperf_bin, 'all')
-    t2_acc = table2_model(df_acc, TICI_bin, 'acc')
-
-
-    """
-    Table 3
-    Modelling the effect of each feature in 2 logistic regression models (1 for All cases, 1 for ACC)
-    Trying this first since it makes the most of the available data, and I could create 2 separate SVMs
-    which use the 2 sets of features independently (ensemble)
-    """
-    print("\nPerforming Table 3 regression modelling\n")
-
-    t3_all = table3_model(df_all, Reperf_bin, 'all')
-    t3_acc = table3_model(df_acc, TICI_bin, 'acc')
-
-    #save analysis values in spreadsheet
-    results_path = Path(BASE, fpath.stem + '_log_results.xlsx')
-    print(results_path)
-
-    #save
-    with pd.ExcelWriter(results_path) as writer:  
-        t2_all.to_excel(writer, sheet_name='Table 2 All')
-        t2_acc.to_excel(writer, sheet_name='Table 2 ACC')
-        t3_all.to_excel(writer, sheet_name='Table 3 All')
-        t3_acc.to_excel(writer, sheet_name='Table 3 ACC')
-
-def main_one(fpath):
+def main(fpath, scale, do_t2=True, do_t3=True):
     df = pd.read_excel( 
         fpath, 
         nrows=82)
@@ -291,20 +236,22 @@ def main_one(fpath):
     df = df.drop(columns=["Unnamed: 0", "TICI"])
 
     ### standardize the data
-    # all
-    cols = df.columns
-    scaler = MinMaxScaler().fit(df)
-    df = scaler.transform(df)
+    if scale:
+        # all
+        cols = df.columns
+        scaler = MinMaxScaler().fit(df)
+        df = scaler.transform(df)
 
-    #cast back to dataframe
-    df = pd.DataFrame(data=df, columns=cols)
+        #cast back to dataframe
+        df = pd.DataFrame(data=df, columns=cols)
 
 
     """
     Table 2 (modelling each variable individually against
     TICI / reperfusion score)
     """
-    t2 = table2_model(df, TICI_bin, 'one')
+    if do_t2:
+        t2 = table2_model(df, TICI_bin, 'one')
 
 
     """
@@ -314,17 +261,21 @@ def main_one(fpath):
     which use the 2 sets of features independently (ensemble)
     """
     print("\nPerforming Table 3 regression modelling\n")
-
-    t3 = table3_model(df, TICI_bin, 'one')
+    if 'corr' in str(fpath):
+        fname = 'corr'
+    else:
+        fname= 'aa'
+    if do_t3:
+        t3 = table3_model(df, TICI_bin, 'one', fname=fname)
 
     #save analysis values in spreadsheet
     results_path = Path(fpath.parents[0], fpath.stem + '_log_results.xlsx')
-    print(results_path)
 
     #save
     with pd.ExcelWriter(results_path) as writer:  
         t2.to_excel(writer, sheet_name='Table 2')
-        t3.to_excel(writer, sheet_name='Table 3')
+        if do_t3:
+            t3.to_excel(writer, sheet_name='Table 3')
 
 if __name__ == "__main__":
     
@@ -333,14 +284,18 @@ if __name__ == "__main__":
         help="Name of file to load for modelling")
     parser.add_argument("-s", default="both", 
         help="2 sheets or no")
+    parser.add_argument("--scale", dest='scale', action='store_true')
+    parser.add_argument("--no-scale", dest='scale', action='store_false')
+    parser.set_defaults(scale=True)
+    parser.add_argument("--no-t2", dest='t2', action='store_false')
+    parser.set_defaults(t2=True)
+    parser.add_argument("--no-t3", dest='t3', action='store_false')
+    parser.set_defaults(t3=True)
     args = parser.parse_args()
 
     fpath = Path(BASE, args.infile)
     assert fpath.exists()
 
-    if args.s == 'both':
-        main(fpath)
-    else:
-        main_one(fpath)
+    main(fpath, args.scale, args.t2, args.t3)
 
 

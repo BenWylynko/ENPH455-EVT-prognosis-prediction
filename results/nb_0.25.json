@@ -1,0 +1,1 @@
+{"auc": 0.5, "sens": 0.0, "spec": 0.25, "prec": NaN, "npv": 0.2, "F1": NaN, "conf_mat": [[0, 0], [4, 1]]}

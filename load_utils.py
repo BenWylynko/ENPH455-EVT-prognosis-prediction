@@ -32,7 +32,6 @@ def load_all_nii(ids_names):
     Load multiple NII files, given list of format ["id/fname", ...]
     """
     plist = [Path(DATA_BASE, id_name) for id_name in ids_names]
-    print([load_niftii(p).shape for p in plist])
     return np.array([load_niftii(p) for p in plist])
 
 def load_all_nrrd(id_list):

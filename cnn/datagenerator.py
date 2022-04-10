@@ -103,8 +103,3 @@ class DataGenerator(tf.keras.utils.Sequence): #for multiprocessing
             y[i] = self.labels[ID.parents[0].stem]
 
         return X, tf.keras.utils.to_categorical(y, num_classes=self.n_classes) #onehot
-
-    
-
-if __name__ == "__main__":
-    print(path_gen_saved(Path('0157754', '7 Post Contrast_2.nii')))

@@ -41,10 +41,18 @@ def save_niftii(data, fpath):
     print(f"Saving volume to {fpath}")
     nib.save(img, fpath)
 
-def load_stl(fpath):
-    """Load stl file + convert to a raster format"""
+def pad_nrrd(arr, pad_size=(837, 512, 437)):
 
+    padding = np.subtract(pad_size, arr.shape)
+    x = padding[0] // 2
+    xr = x if padding[0] % 2 == 0 else x + 1
+    y = padding[1] // 2
+    yr = y if padding[1] % 2 == 0 else y + 1
+    z = padding[2] // 2
+    zr = z if padding[2] % 2 == 0 else z + 1
     
+    arr = np.pad(arr, ((x, xr), (y, yr), (z, zr)), constant_values=0.0)
+    return arr
 
 def load_nrrd(fpath):
     """
@@ -66,8 +74,37 @@ def load_all_segmentations(id_list):
     """
     Load multiple NRRD files based on patient ID list
     """
-    plist = [Path(DATA_BASE, id, 'segmentation.nrrd') for id in id_list]
-    return np.array([load_nrrd(p) for p in plist])
+    files = []
+    ims = []
+    for id_ in id_list:
+        if Path(DATA_BASE, id_, 'segmentation.nrrd').is_file():
+            files.append(Path(DATA_BASE, id_, 'segmentation.nrrd'))
+        else:
+            files.append(Path(DATA_BASE, id_, 'Segmentation.nrrd'))
+
+    for file_ in files:
+        assert file_.is_file(), f"non-existent file {file_}" 
+    
+    for i, file in enumerate(files):
+        imgg = load_nrrd(str(file))
+        ims.append(imgg)
+    return ims
+
+def load_masked_imgs(id_list):
+    """Load multiple masked images"""
+    files = []
+    ims = []
+    for id_ in id_list:
+        files.append(Path(DATA_BASE, id_, 'img_masked.nrrd'))
+
+    for file_ in files:
+        assert file_.is_file(), f"non-existent file {file_}" 
+    
+    for i, file in enumerate(files):
+        imgg = load_nrrd(str(file))
+        ims.append(imgg)
+    return ims
+
 
 def normalize(volume, min=-1000, max=500):
     """Normalize the volume"""
@@ -77,7 +114,7 @@ def normalize(volume, min=-1000, max=500):
     volume = volume.astype("int16")
     return volume
 
-def resize_volume(img, volume=256):
+def resize_volume(img, rotate=True, angle=90, volume=256):
     """Resize across z-axis"""
     # Get current depth
     current_depth = img.shape[-1]
@@ -91,9 +128,9 @@ def resize_volume(img, volume=256):
     width_factor = 1 / width
     height_factor = 1 / height
     # Rotate
-    img = ndimage.rotate(img, 90, reshape=False)
+    if rotate:
+        img = ndimage.rotate(img, angle, reshape=False)
     # Resize across z-axis
-    print(type(img))
     img = ndimage.zoom(img, (width_factor, height_factor, depth_factor), order=1)
     return img
 
