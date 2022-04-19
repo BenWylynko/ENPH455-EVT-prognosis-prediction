@@ -52,7 +52,7 @@ Brief descriptions of relevant scripts are shown below:
 `regression_modelling.py` - Does logistic regression modelling of all categorical features <br/>
 `univariate.py` - univariate analysis of spreadsheet data
 
-**cnn**
+**cnn** <br/>
 `cnn.py` - train a CNN on raw images <br/>
 `cnn_seg.py` - train a CNN on the segmented / masked images <br/>
 `pred_all.py` - get predictions with all segmented and masked models <br/>
